@@ -1,0 +1,39 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "api": {
+      "root": ".",
+      "framework": "express",
+      "entrypoint": "src/index.ts",
+      "functions": {
+        "src/index.ts": {
+          "regions": ["sin1"],
+          "maxDuration": 60
+        }
+      }
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": { "service": "api" }
+    }
+  ],
+  "daemons": {
+    "temporal-worker": {
+      "root": ".",
+      "entrypoint": "Dockerfile",
+      "command": ["npm", "run", "start:worker"],
+      "instances": { "sin1": 1 },
+      "terminationGracePeriodSeconds": 120,
+      "bindings": [
+        {
+          "type": "service",
+          "service": "api",
+          "format": "url",
+          "env": "SUPPLIER_API_BASE_URL"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes: ["temporal-postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  temporal:
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    image: temporalio/auto-setup:1.27.2
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports: ["7233:7233"]
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address \"$(hostname -i):7233\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  temporal-ui:
+    image: temporalio/ui:2.37.2
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8080:8080"]
+    restart: unless-stopped
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  api:
+    build: .
+    command: ["npm", "run", "start:api"]
+    environment: &app-env
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: HOTEL_AGGREGATION_QUEUE
+      SUPPLIER_A_URL: http://api:3000/supplierA/hotels
+      SUPPLIER_B_URL: http://api:3000/supplierB/hotels
+      MOCK_SUPPLIER_A_MODE: ${MOCK_SUPPLIER_A_MODE:-normal}
+      MOCK_SUPPLIER_B_MODE: ${MOCK_SUPPLIER_B_MODE:-normal}
+    depends_on:
+      redis: { condition: service_healthy }
+      temporal: { condition: service_started }
+    ports: ["3000:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  worker:
+    build: .
+    command: ["npm", "run", "start:worker"]
+    environment: *app-env
+    depends_on:
+      redis: { condition: service_healthy }
+      temporal: { condition: service_started }
+      api: { condition: service_started }
+    restart: unless-stopped
+volumes:
+  temporal-postgres:
+  redis-data:
